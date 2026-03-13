@@ -16,14 +16,14 @@ import (
 	"time"
 )
 
-// OAuth1Client signs and executes HTTP requests using OAuth 1.0a HMAC-SHA1.
-type OAuth1Client struct {
+// FSOAuth1Client signs and executes HTTP requests using OAuth 1.0a HMAC-SHA1.
+type FSOAuth1Client struct {
 	config *Config
 }
 
-// NewOAuth1Client returns an OAuth1Client configured with the provided credentials.
-func NewOAuth1Client(cfg *Config) *OAuth1Client {
-	return &OAuth1Client{config: cfg}
+// NewFSOAuth1Client returns an OAuth1Client configured with the provided credentials.
+func NewFSOAuth1Client(cfg *Config) *FSOAuth1Client {
+	return &FSOAuth1Client{config: cfg}
 }
 
 // MakeRequest signs and executes an OAuth 1.0a request against rawURL.
@@ -32,14 +32,14 @@ func NewOAuth1Client(cfg *Config) *OAuth1Client {
 // token and tokenSecret are the user-level OAuth token pair; pass empty strings
 // for two-legged (app-only) requests such as fetching a request token.
 // The response body is parsed as JSON first, falling back to query-string form,
-// and returned as a flat string map.
-func (c *OAuth1Client) MakeRequest(
+// and returned as a map preserving the original structure.
+func (c *FSOAuth1Client) MakeRequest(
 	method string,
 	rawURL string,
 	extraParams map[string]string,
 	token string,
 	tokenSecret string,
-) (map[string]string, error) {
+) (map[string]interface{}, error) {
 	oauthParams := c.buildOAuthParams(token)
 	if token == "" {
 		delete(oauthParams, "oauth_token")
@@ -102,18 +102,14 @@ func (c *OAuth1Client) MakeRequest(
 
 	var jsonResult map[string]interface{}
 	if err := json.Unmarshal(body, &jsonResult); err == nil {
-		result := make(map[string]string)
-		for k, v := range jsonResult {
-			result[k] = fmt.Sprintf("%v", v)
-		}
-		return result, nil
+		return jsonResult, nil
 	}
 
 	parsed, err := url.ParseQuery(string(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse response: %s", string(body))
 	}
-	result := make(map[string]string)
+	result := make(map[string]interface{})
 	for k, vs := range parsed {
 		if len(vs) > 0 {
 			result[k] = vs[0]
@@ -124,7 +120,7 @@ func (c *OAuth1Client) MakeRequest(
 
 // buildOAuthParams returns the standard OAuth 1.0a protocol parameters for a
 // request. When token is empty the oauth_token field is omitted by the caller.
-func (c *OAuth1Client) buildOAuthParams(token string) map[string]string {
+func (c *FSOAuth1Client) buildOAuthParams(token string) map[string]string {
 	return map[string]string{
 		"oauth_consumer_key":     c.config.ClientID,
 		"oauth_nonce":            generateNonce(),

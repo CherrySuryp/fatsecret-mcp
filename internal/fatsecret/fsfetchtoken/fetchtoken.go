@@ -20,7 +20,7 @@ const (
 
 type OAuthClient struct {
 	config *fsauth.Config
-	oauth1 *fsauth.OAuth1Client
+	oauth1 *fsauth.FSOAuth1Client
 }
 
 func NewOAuthClient() *OAuthClient {
@@ -30,7 +30,7 @@ func NewOAuthClient() *OAuthClient {
 	}
 	return &OAuthClient{
 		config: cfg,
-		oauth1: fsauth.NewOAuth1Client(cfg),
+		oauth1: fsauth.NewFSOAuth1Client(cfg),
 	}
 }
 
@@ -109,8 +109,8 @@ func (c *OAuthClient) runOAuthFlow() error {
 		return fmt.Errorf("failed to get request token: %w", err)
 	}
 
-	requestToken := response["oauth_token"]
-	requestTokenSecret := response["oauth_token_secret"]
+	requestToken, _ := response["oauth_token"].(string)
+	requestTokenSecret, _ := response["oauth_token_secret"].(string)
 
 	if requestToken == "" || requestTokenSecret == "" {
 		return fmt.Errorf("invalid response: missing token or token secret")
@@ -149,13 +149,15 @@ func (c *OAuthClient) runOAuthFlow() error {
 		return fmt.Errorf("failed to get access token: %w", err)
 	}
 
-	if accessResponse["oauth_token"] == "" || accessResponse["oauth_token_secret"] == "" {
+	accessToken, _ := accessResponse["oauth_token"].(string)
+	accessTokenSecret, _ := accessResponse["oauth_token_secret"].(string)
+	if accessToken == "" || accessTokenSecret == "" {
 		return fmt.Errorf("invalid response from access token endpoint. Please try again")
 	}
 
-	c.config.AccessToken = accessResponse["oauth_token"]
-	c.config.AccessTokenSecret = accessResponse["oauth_token_secret"]
-	c.config.UserID = accessResponse["user_id"]
+	c.config.AccessToken = accessToken
+	c.config.AccessTokenSecret = accessTokenSecret
+	c.config.UserID, _ = accessResponse["user_id"].(string)
 
 	if err := fsauth.SaveConfig(c.config); err != nil {
 		return err
@@ -183,7 +185,7 @@ func (c *OAuthClient) verifyCredentialsGet() error {
 	if err != nil {
 		return err
 	}
-	if errMsg, ok := result["error"]; ok {
+	if errMsg, ok := result["error"].(string); ok {
 		return fmt.Errorf("API error: %s", errMsg)
 	}
 	fmt.Println("✓ Credentials verified successfully")
@@ -225,7 +227,7 @@ func (c *OAuthClient) run() error {
 		return err
 	}
 	c.config = cfg
-	c.oauth1 = fsauth.NewOAuth1Client(cfg)
+	c.oauth1 = fsauth.NewFSOAuth1Client(cfg)
 
 	fmt.Println("FatSecret OAuth Console Utility")
 	fmt.Println("This utility will help you authenticate with the FatSecret API.")

@@ -1,7 +1,7 @@
 package main
 
-import "github.com/cherrysuryp/fatsecret-mcp/internal/fatsecret/fetchtoken"
+import "github.com/cherrysuryp/fatsecret-mcp/internal/fatsecret/fsfetchtoken"
 
 func main() {
-	fetchtoken.FetchToken()
+	fsfetchtoken.FetchToken()
 }
