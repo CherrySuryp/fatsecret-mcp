@@ -2,87 +2,36 @@ package fetchtoken
 
 import (
 	"bufio"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha1"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
-	"time"
+
+	"github.com/cherrysuryp/fatsecret-mcp/internal/fatsecret/auth"
 )
 
 const (
-	apiURL          = "https://platform.fatsecret.com/rest/server.api"
+	profileURL      = "https://platform.fatsecret.com/rest/profile/v1"
 	requestTokenURL = "https://authentication.fatsecret.com/oauth/request_token"
 	authorizeURL    = "https://authentication.fatsecret.com/oauth/authorize"
 	accessTokenURL  = "https://authentication.fatsecret.com/oauth/access_token"
 )
 
-type Config struct {
-	ClientID          string `json:"clientId"`
-	ClientSecret      string `json:"clientSecret"`
-	AccessToken       string `json:"accessToken,omitempty"`
-	AccessTokenSecret string `json:"accessTokenSecret,omitempty"`
-	UserID            string `json:"userId,omitempty"`
-}
-
 type OAuthClient struct {
-	config     Config
-	configPath string
+	config *auth.Config
+	oauth1 *auth.OAuth1Client
 }
 
 func NewOAuthClient() *OAuthClient {
-	home, _ := os.UserHomeDir()
+	cfg := &auth.Config{
+		ClientID:     os.Getenv("CLIENT_ID"),
+		ClientSecret: os.Getenv("CLIENT_SECRET"),
+	}
 	return &OAuthClient{
-		configPath: filepath.Join(home, ".fatsecret-mcp-config.json"),
-		config: Config{
-			ClientID:     os.Getenv("CLIENT_ID"),
-			ClientSecret: os.Getenv("CLIENT_SECRET"),
-		},
+		config: cfg,
+		oauth1: auth.NewOAuth1Client(cfg),
 	}
-}
-
-func (c *OAuthClient) loadConfig() error {
-	data, err := os.ReadFile(c.configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	var loaded Config
-	if err := json.Unmarshal(data, &loaded); err != nil {
-		return err
-	}
-	// Merge: env vars take precedence for credentials if set
-	if c.config.ClientID == "" {
-		c.config.ClientID = loaded.ClientID
-	}
-	if c.config.ClientSecret == "" {
-		c.config.ClientSecret = loaded.ClientSecret
-	}
-	c.config.AccessToken = loaded.AccessToken
-	c.config.AccessTokenSecret = loaded.AccessTokenSecret
-	c.config.UserID = loaded.UserID
-	return nil
-}
-
-func (c *OAuthClient) saveConfig() error {
-	data, err := json.MarshalIndent(c.config, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(c.configPath, data, 0600)
 }
 
 func prompt(question string) (string, error) {
@@ -106,151 +55,6 @@ func openBrowser(rawURL string) bool {
 		cmd = exec.Command("xdg-open", rawURL)
 	}
 	return cmd.Start() == nil
-}
-
-func generateNonce() string {
-	b := make([]byte, 16)
-	rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-// percentEncode implements RFC 3986 percent encoding for OAuth 1.0a.
-// Only unreserved characters (A-Z a-z 0-9 - _ . ~) are left unencoded.
-func percentEncode(s string) string {
-	var buf strings.Builder
-	for _, b := range []byte(s) {
-		if isUnreserved(b) {
-			buf.WriteByte(b)
-		} else {
-			fmt.Fprintf(&buf, "%%%02X", b)
-		}
-	}
-	return buf.String()
-}
-
-func isUnreserved(b byte) bool {
-	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') ||
-		(b >= '0' && b <= '9') || b == '-' || b == '_' || b == '.' || b == '~'
-}
-
-func signatureBaseString(method, rawURL string, params map[string]string) string {
-	keys := make([]string, 0, len(params))
-	for k := range params {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, percentEncode(k)+"="+percentEncode(params[k]))
-	}
-	normalizedParams := strings.Join(parts, "&")
-
-	return strings.Join([]string{
-		strings.ToUpper(method),
-		percentEncode(rawURL),
-		percentEncode(normalizedParams),
-	}, "&")
-}
-
-func generateSignature(method, rawURL string, params map[string]string, clientSecret, tokenSecret string) string {
-	base := signatureBaseString(method, rawURL, params)
-	signingKey := percentEncode(clientSecret) + "&" + percentEncode(tokenSecret)
-
-	mac := hmac.New(sha1.New, []byte(signingKey))
-	mac.Write([]byte(base))
-	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
-}
-
-func (c *OAuthClient) buildOAuthParams(token string) map[string]string {
-	return map[string]string{
-		"oauth_consumer_key":     c.config.ClientID,
-		"oauth_nonce":            generateNonce(),
-		"oauth_signature_method": "HMAC-SHA1",
-		"oauth_timestamp":        fmt.Sprintf("%d", time.Now().Unix()),
-		"oauth_version":          "1.0",
-		"oauth_token":            token,
-	}
-}
-
-func (c *OAuthClient) makeOAuthRequest(method, rawURL string, extraParams map[string]string, token, tokenSecret string) (map[string]string, error) {
-	oauthParams := c.buildOAuthParams(token)
-	if token == "" {
-		delete(oauthParams, "oauth_token")
-	}
-
-	// Merge all params for signature
-	allParams := make(map[string]string)
-	for k, v := range oauthParams {
-		allParams[k] = v
-	}
-	for k, v := range extraParams {
-		allParams[k] = v
-	}
-
-	sig := generateSignature(method, rawURL, allParams, c.config.ClientSecret, tokenSecret)
-	allParams["oauth_signature"] = sig
-
-	var req *http.Request
-	var err error
-
-	if method == "GET" {
-		vals := url.Values{}
-		for k, v := range allParams {
-			vals.Set(k, v)
-		}
-		req, err = http.NewRequest("GET", rawURL+"?"+vals.Encode(), nil)
-	} else {
-		vals := url.Values{}
-		for k, v := range allParams {
-			vals.Set(k, v)
-		}
-		body := vals.Encode()
-		req, err = http.NewRequest("POST", rawURL, strings.NewReader(body))
-		if err == nil {
-			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		}
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	// Try JSON first, fall back to query string
-	var jsonResult map[string]interface{}
-	if err := json.Unmarshal(body, &jsonResult); err == nil {
-		result := make(map[string]string)
-		for k, v := range jsonResult {
-			result[k] = fmt.Sprintf("%v", v)
-		}
-		return result, nil
-	}
-
-	parsed, err := url.ParseQuery(string(body))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse response: %s", string(body))
-	}
-	result := make(map[string]string)
-	for k, vs := range parsed {
-		if len(vs) > 0 {
-			result[k] = vs[0]
-		}
-	}
-	return result, nil
 }
 
 func (c *OAuthClient) setupCredentials() error {
@@ -289,7 +93,7 @@ func (c *OAuthClient) setupCredentials() error {
 	c.config.ClientID = clientID
 	c.config.ClientSecret = clientSecret
 
-	if err := c.saveConfig(); err != nil {
+	if err := auth.SaveConfig(c.config); err != nil {
 		return err
 	}
 	fmt.Println("✓ Credentials saved successfully")
@@ -299,16 +103,8 @@ func (c *OAuthClient) setupCredentials() error {
 func (c *OAuthClient) runOAuthFlow() error {
 	fmt.Println("=== Starting OAuth Flow ===")
 
-	// Step 1: Get request token
 	fmt.Println("Step 1: Getting request token...")
-
-	response, err := c.makeOAuthRequest(
-		"POST",
-		requestTokenURL,
-		map[string]string{"oauth_callback": "oob"},
-		"",
-		"",
-	)
+	response, err := c.oauth1.MakeRequest("POST", requestTokenURL, map[string]string{"oauth_callback": "oob"}, "", "")
 	if err != nil {
 		return fmt.Errorf("failed to get request token: %w", err)
 	}
@@ -321,7 +117,6 @@ func (c *OAuthClient) runOAuthFlow() error {
 	}
 	fmt.Println("✓ Request token obtained")
 
-	// Step 2: User authorization
 	fmt.Println("Step 2: User authorization")
 	authURL := fmt.Sprintf("%s?oauth_token=%s", authorizeURL, requestToken)
 
@@ -346,10 +141,8 @@ func (c *OAuthClient) runOAuthFlow() error {
 		return fmt.Errorf("verifier code is required")
 	}
 
-	// Step 3: Get access token
 	fmt.Println("\nStep 3: Getting access token...")
-
-	accessResponse, err := c.makeOAuthRequest("GET", accessTokenURL, map[string]string{
+	accessResponse, err := c.oauth1.MakeRequest("GET", accessTokenURL, map[string]string{
 		"oauth_verifier": verifier,
 	}, requestToken, requestTokenSecret)
 	if err != nil {
@@ -364,26 +157,27 @@ func (c *OAuthClient) runOAuthFlow() error {
 	c.config.AccessTokenSecret = accessResponse["oauth_token_secret"]
 	c.config.UserID = accessResponse["user_id"]
 
-	if err := c.saveConfig(); err != nil {
+	if err := auth.SaveConfig(c.config); err != nil {
 		return err
 	}
 
 	fmt.Println("✓ Access token obtained")
 	fmt.Println("✓ OAuth flow completed successfully!")
 	fmt.Printf("User ID: %s\n", c.config.UserID)
-	fmt.Printf("Authentication details saved to: %s\n", c.configPath)
+	fmt.Printf("Authentication details saved to: %s\n", auth.ConfigPath())
 
-	// Step 4: Verify credentials with a test API call
 	fmt.Println("\nStep 4: Verifying credentials...")
-	if err := c.verifyCredentials(); err != nil {
+	if err := c.verifyCredentialsGet(); err != nil {
 		return fmt.Errorf("credential verification failed: %w", err)
 	}
 	return nil
 }
 
-func (c *OAuthClient) verifyCredentials() error {
-	result, err := c.makeOAuthRequest("GET", apiURL, map[string]string{
-		"method": "profile.get",
+// verifyCredentialsGet confirms that the stored OAuth credentials are valid by
+// calling the REST profile endpoint. It is used after the OAuth flow completes
+// to ensure the obtained access token and secret are accepted by the API.
+func (c *OAuthClient) verifyCredentialsGet() error {
+	result, err := c.oauth1.MakeRequest("GET", profileURL, map[string]string{
 		"format": "json",
 	}, c.config.AccessToken, c.config.AccessTokenSecret)
 	if err != nil {
@@ -422,13 +216,16 @@ func (c *OAuthClient) checkStatus() {
 		}
 		fmt.Printf("User ID: %s\n", userID)
 	}
-	fmt.Printf("Config file: %s\n", c.configPath)
+	fmt.Printf("Config file: %s\n", auth.ConfigPath())
 }
 
 func (c *OAuthClient) run() error {
-	if err := c.loadConfig(); err != nil {
+	cfg, err := auth.LoadConfig()
+	if err != nil {
 		return err
 	}
+	c.config = cfg
+	c.oauth1 = auth.NewOAuth1Client(cfg)
 
 	fmt.Println("FatSecret OAuth Console Utility")
 	fmt.Println("This utility will help you authenticate with the FatSecret API.")
