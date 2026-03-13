@@ -1,4 +1,4 @@
-package fetchtoken
+package fsfetchtoken
 
 import (
 	"bufio"
@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/cherrysuryp/fatsecret-mcp/internal/fatsecret/auth"
+	"github.com/cherrysuryp/fatsecret-mcp/internal/fatsecret/fsauth"
 )
 
 const (
@@ -19,18 +19,18 @@ const (
 )
 
 type OAuthClient struct {
-	config *auth.Config
-	oauth1 *auth.OAuth1Client
+	config *fsauth.Config
+	oauth1 *fsauth.OAuth1Client
 }
 
 func NewOAuthClient() *OAuthClient {
-	cfg := &auth.Config{
+	cfg := &fsauth.Config{
 		ClientID:     os.Getenv("CLIENT_ID"),
 		ClientSecret: os.Getenv("CLIENT_SECRET"),
 	}
 	return &OAuthClient{
 		config: cfg,
-		oauth1: auth.NewOAuth1Client(cfg),
+		oauth1: fsauth.NewOAuth1Client(cfg),
 	}
 }
 
@@ -93,7 +93,7 @@ func (c *OAuthClient) setupCredentials() error {
 	c.config.ClientID = clientID
 	c.config.ClientSecret = clientSecret
 
-	if err := auth.SaveConfig(c.config); err != nil {
+	if err := fsauth.SaveConfig(c.config); err != nil {
 		return err
 	}
 	fmt.Println("✓ Credentials saved successfully")
@@ -157,14 +157,14 @@ func (c *OAuthClient) runOAuthFlow() error {
 	c.config.AccessTokenSecret = accessResponse["oauth_token_secret"]
 	c.config.UserID = accessResponse["user_id"]
 
-	if err := auth.SaveConfig(c.config); err != nil {
+	if err := fsauth.SaveConfig(c.config); err != nil {
 		return err
 	}
 
 	fmt.Println("✓ Access token obtained")
 	fmt.Println("✓ OAuth flow completed successfully!")
 	fmt.Printf("User ID: %s\n", c.config.UserID)
-	fmt.Printf("Authentication details saved to: %s\n", auth.ConfigPath())
+	fmt.Printf("Authentication details saved to: %s\n", fsauth.ConfigPath())
 
 	fmt.Println("\nStep 4: Verifying credentials...")
 	if err := c.verifyCredentialsGet(); err != nil {
@@ -216,16 +216,16 @@ func (c *OAuthClient) checkStatus() {
 		}
 		fmt.Printf("User ID: %s\n", userID)
 	}
-	fmt.Printf("Config file: %s\n", auth.ConfigPath())
+	fmt.Printf("Config file: %s\n", fsauth.ConfigPath())
 }
 
 func (c *OAuthClient) run() error {
-	cfg, err := auth.LoadConfig()
+	cfg, err := fsauth.LoadConfig()
 	if err != nil {
 		return err
 	}
 	c.config = cfg
-	c.oauth1 = auth.NewOAuth1Client(cfg)
+	c.oauth1 = fsauth.NewOAuth1Client(cfg)
 
 	fmt.Println("FatSecret OAuth Console Utility")
 	fmt.Println("This utility will help you authenticate with the FatSecret API.")

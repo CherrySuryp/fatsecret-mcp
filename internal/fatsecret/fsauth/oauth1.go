@@ -1,4 +1,4 @@
-package auth
+package fsauth
 
 import (
 	"crypto/hmac"
@@ -197,4 +197,3 @@ func generateSignature(method, rawURL string, params map[string]string, clientSe
 	mac.Write([]byte(base))
 	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
 }
-
