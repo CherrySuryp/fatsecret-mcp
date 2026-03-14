@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"sort"
@@ -39,19 +40,15 @@ func (c *FSOAuth1Client) MakeRequest(
 	extraParams map[string]string,
 	token string,
 	tokenSecret string,
-) (map[string]interface{}, error) {
+) (map[string]any, error) {
 	oauthParams := c.buildOAuthParams(token)
 	if token == "" {
 		delete(oauthParams, "oauth_token")
 	}
 
 	allParams := make(map[string]string)
-	for k, v := range oauthParams {
-		allParams[k] = v
-	}
-	for k, v := range extraParams {
-		allParams[k] = v
-	}
+	maps.Copy(allParams, oauthParams)
+	maps.Copy(allParams, extraParams)
 
 	sig := generateSignature(method, rawURL, allParams, c.config.ClientSecret, tokenSecret)
 	allParams["oauth_signature"] = sig
@@ -67,6 +64,18 @@ func (c *FSOAuth1Client) MakeRequest(
 			vals.Set(k, v)
 		}
 		req, err = http.NewRequest("GET", rawURL+"?"+vals.Encode(), nil)
+	} else if method == "DELETE" {
+		// For DELETE requests parameters are sent as an application/x-www-form-urlencoded
+		// body, same encoding as POST but with the DELETE method.
+		vals := url.Values{}
+		for k, v := range allParams {
+			vals.Set(k, v)
+		}
+		body := vals.Encode()
+		req, err = http.NewRequest("DELETE", rawURL, strings.NewReader(body))
+		if err == nil {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
 	} else {
 		// For POST requests parameters are sent as an application/x-www-form-urlencoded
 		// body. This is required for OAuth token-exchange endpoints (request token,
@@ -100,7 +109,7 @@ func (c *FSOAuth1Client) MakeRequest(
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
-	var jsonResult map[string]interface{}
+	var jsonResult map[string]any
 	if err := json.Unmarshal(body, &jsonResult); err == nil {
 		return jsonResult, nil
 	}
@@ -109,7 +118,7 @@ func (c *FSOAuth1Client) MakeRequest(
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse response: %s", string(body))
 	}
-	result := make(map[string]interface{})
+	result := make(map[string]any)
 	for k, vs := range parsed {
 		if len(vs) > 0 {
 			result[k] = vs[0]
