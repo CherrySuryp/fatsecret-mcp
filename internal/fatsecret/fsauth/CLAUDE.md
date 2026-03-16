@@ -1,45 +1,65 @@
 # internal/fatsecret/fsauth
 
-OAuth 1.0a credentials and request-signing for the FatSecret API.
+OAuth 1.0 signing utilities for the FatSecret API. Produces `Authorization` header values — does not make HTTP requests.
+
+## Requirements
+
+- **Isolated**: must not import `internal/config` or `internal/logging`.
+- **No HTTP**: no `net/http` usage; signing only.
+- **Stdlib only**: no external OAuth libraries.
 
 ## Files
 
-- **config.go** — `Config` struct, `LoadConfig`, `SaveConfig`, `ConfigPath`
-- **oauth1.go** — `FSOAuth1Client` and its signing/request helpers
-
-## Config
-
-`Config` holds all credential fields. Loading merges two sources with env vars taking precedence over the file:
-
-| Field | Source |
+| File | Purpose |
 |---|---|
-| `ClientID` / `ClientSecret` | `CLIENT_ID` / `CLIENT_SECRET` env vars, fallback to file |
-| `AccessToken` / `AccessTokenSecret` | file only (written by the OAuth flow) |
-| `UserID` | file only |
+| `base_auth.go` | `BaseAuth` struct with shared consumer credentials |
+| `signed_auth.go` | `SignedAuth` for non-delegated (public) requests |
+| `delegated_auth.go` | `DelegatedAuth` for user-specific (profile) requests |
+| `common.go` | Shared signing helpers (nonce, encoding, header building) |
 
-The config file lives at `~/.fatsecret-mcp-config.json` (mode 0600). `ConfigPath()` returns the full path.
+## Auth types
 
-## FSOAuth1Client
+### `SignedAuth`
 
-`NewFSOAuth1Client(cfg)` wraps a `*Config` and exposes one method:
+For endpoints that do not require a user identity (e.g. food search, food lookup).
 
 ```go
-MakeRequest(method, rawURL string, extraParams map[string]string, token, tokenSecret string) (map[string]interface{}, error)
+client := fsauth.NewSignedAuth(consumerKey, consumerSecret)
+header, err := client.AuthorizationHeader("GET", baseURL, requestParams)
 ```
 
-- `extraParams` are business-level params for the endpoint (e.g. `{"format": "json"}`). OAuth protocol params are added automatically.
-- Pass empty `token` / `tokenSecret` for app-only calls (e.g. request-token step).
-- **GET**: all params appended as query string — used for FatSecret REST API calls.
-- **POST**: all params sent as `application/x-www-form-urlencoded` body — used for OAuth token-exchange endpoints only.
-- Response is parsed as JSON (preserving nested structure), falling back to query-string form, and returned as `map[string]interface{}`.
+Signing key: `percentEncode(consumerSecret) + "&"`
 
-## Key invariants
+### `DelegatedAuth`
 
-- Signing follows RFC 5849 §3.4.1: params sorted lexicographically, percent-encoded per RFC 3986.
-- Only unreserved characters (`A-Z a-z 0-9 - _ . ~`) are left unencoded — **do not use** `url.QueryEscape` here, it encodes differently.
-- Signing key format: `percentEncode(clientSecret) + "&" + percentEncode(tokenSecret)`.
+For endpoints that operate on behalf of a user profile (e.g. diary, favorites, exercise log). Requires per-user tokens from `FSAPIUserConfig`.
+
+```go
+client := fsauth.NewDelegatedAuth(consumerKey, consumerSecret, accessToken, secretToken)
+header, err := client.AuthorizationHeader("POST", baseURL, requestParams)
+```
+
+Signing key: `percentEncode(consumerSecret) + "&" + percentEncode(tokenSecret)`
+
+Mapping from `internal/config.FSAPIUserConfig`:
+
+| `FSAPIUserConfig` field | `NewDelegatedAuth` param |
+|---|---|
+| `AccessToken` | `oauthToken` |
+| `SecretToken` | `oauthTokenSecret` |
+| `UserID` | not used for signing |
+
+## `AuthorizationHeader` algorithm
+
+1. Build OAuth params map (nonce, timestamp, consumer key, signature method, version; `oauth_token` added for delegated)
+2. Merge OAuth params + `requestParams` into one map for signing
+3. Percent-encode and sort all params → normalized parameter string
+4. Build signature base string: `METHOD&percentEncode(url)&percentEncode(params)`
+5. HMAC-SHA1 sign → base64 encode → `oauth_signature`
+6. Build and return `OAuth key="value", ...` header string
 
 ## What this package does NOT do
 
-- Interactive OAuth flow (user prompts, browser opening) — that lives in `internal/fatsecret/fsfetchtoken`.
-- FatSecret REST API calls — those live in `internal/fatsecret/fsclient`.
+- HTTP requests — that lives in `internal/fatsecret/fsclient`.
+- Token fetching or profile creation — that lives in `internal/fatsecret/fsfetchtoken`.
+- Config loading — callers extract raw strings from `internal/config` and pass them in.
