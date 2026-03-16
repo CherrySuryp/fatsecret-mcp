@@ -1,4 +1,4 @@
-package fsclient
+package fsprofileapi
 
 type MealType string
 

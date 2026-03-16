@@ -1,21 +1,21 @@
-package fsclient
+package fsprofileapi
 
 import "encoding/json"
 
-const deleteRecipeFavoritePath = "recipe/favorites/v1"
+const addRecipeFavoritePath = "recipe/favorites/v1"
 
-type RecipeDeleteFavoriteReq struct {
+type RecipeAddFavoriteReq struct {
 	RecipeID string
 }
 
-func (c *Client) RecipeDeleteFavorite(payload RecipeDeleteFavoriteReq) (SuccessResp, error) {
+func (c *Client) RecipeAddFavorite(payload RecipeAddFavoriteReq) (SuccessResp, error) {
 	var result SuccessResp
 
 	params := map[string]string{
 		"recipe_id": payload.RecipeID,
 	}
 
-	resp, err := c.delete(deleteRecipeFavoritePath, params)
+	resp, err := c.post(addRecipeFavoritePath, params)
 	if err != nil {
 		return result, err
 	}
