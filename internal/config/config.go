@@ -7,6 +7,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/caarlos0/env/v11"
@@ -119,6 +120,41 @@ func (c *Config) loadUserConfig() error {
 	err = json.Unmarshal(data, &c.FSAPIUserConfig)
 
 	return err
+}
+
+// resolveUserConfigPath expands "~/" in UserConfigPath and returns the absolute
+// path without stat-ing the file (suitable for write operations).
+func (c *Config) resolveUserConfigPath() (string, error) {
+	filePath := c.FSAPIClientConfig.UserConfigPath
+	if strings.HasPrefix(filePath, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		filePath = home + filePath[1:]
+	}
+	return filePath, nil
+}
+
+// SaveUserConfig writes userCfg as JSON to the user config file path specified
+// by FSAPIClientConfig.UserConfigPath. The file is created with mode 0600;
+// parent directories are created as needed.
+func (c *Config) SaveUserConfig(userCfg FSAPIUserConfig) error {
+	filePath, err := c.resolveUserConfigPath()
+	if err != nil {
+		return fmt.Errorf("config: resolve user config path: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
+		return fmt.Errorf("config: create config dir: %w", err)
+	}
+	data, err := json.MarshalIndent(userCfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("config: marshal user config: %w", err)
+	}
+	if err := os.WriteFile(filePath, data, 0o600); err != nil {
+		return fmt.Errorf("config: write user config: %w", err)
+	}
+	return nil
 }
 
 // UserConfigExists reports whether the user config file exists on disk.
